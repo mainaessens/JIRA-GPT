@@ -1,0 +1,11 @@
+﻿Epic: Gran Bazar Chino
+
+Historias a crear bajo esta épica:
+- Diseño 1
+- Diseño 2
+- Diseño 3
+- Diseño 4
+- Diseño 5
+- Diseño 6
+- Diseño 7
+- Diseño 8
