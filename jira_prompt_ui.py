@@ -3,32 +3,65 @@ import os, io
 from contextlib import redirect_stdout
 import streamlit as st
 
-# Importa tu pipeline existente
-from jira_auto_create import run_pipeline
+# --- Opción A: hidratar variables ANTES del import ---
+def hydrate_env_from_secrets():
+    """
+    Carga variables desde el entorno si existen; si no, intenta st.secrets.
+    No pisa valores ya presentes en os.environ.
+    """
+    KEYS = [
+        "JIRA_BASE_URL",
+        "JIRA_EMAIL",
+        "JIRA_API_TOKEN",
+        "JIRA_PROJECT_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+        "JIRA_DRY_RUN",
+        "JIRA_EPIC_NAME",  # opcional; si no usás épica por variable, dejalo vacío
+    ]
+    for k in KEYS:
+        if not os.getenv(k):
+            v = st.secrets.get(k, None)
+            if v is not None:
+                os.environ[k] = str(v)
 
+hydrate_env_from_secrets()
+
+# Importa tu pipeline existente (ya con envs disponibles)
+try:
+    from jira_auto_create import run_pipeline
+except Exception as e:
+    st.error(
+        "No se pudo importar `jira_auto_create`. "
+        "Verificá que las variables estén cargadas y que las dependencias coincidan "
+        "(pydantic>=2, openai>=1). Detalle: {}".format(e)
+    )
+    st.stop()
+
+# --- UI ---
 st.set_page_config(page_title="Jira Prompt → Tasks", page_icon="✅", layout="centered")
 st.title("Jira Prompt → Tasks")
 st.caption("Pegá un brief y convertilo en tareas/subtareas en tu proyecto Jira.")
 
 with st.sidebar:
     st.header("Configuración")
-    st.write("Las credenciales se toman de variables de entorno.")
-    # Mostrar (solo lectura) para confirmar
+    st.write("Las credenciales se toman de variables de entorno / secrets.")
+
+    # Mostrar (solo lectura) para confirmar (ya hidratadas)
     st.text_input("JIRA_BASE_URL", os.getenv("JIRA_BASE_URL",""), disabled=True)
     st.text_input("JIRA_PROJECT_KEY", os.getenv("JIRA_PROJECT_KEY",""), disabled=True)
     st.text_input("OPENAI_MODEL", os.getenv("OPENAI_MODEL","gpt-4o-mini"), disabled=True)
 
-    # Épica como variable (opcional)
-    epic = st.text_input("Épica (JIRA_EPIC_NAME)", value=os.getenv("JIRA_EPIC_NAME",""), placeholder="Ej: El Gran Bazar Chino")
-    if epic:
-        os.environ["JIRA_EPIC_NAME"] = epic
-
-    dry_default = True
+    # DRY-RUN por defecto según env (1 = simula)
+    dry_default = (os.getenv("JIRA_DRY_RUN", "1") != "0")
     dry_run = st.checkbox("DRY-RUN (no crear issues)", value=dry_default)
     os.environ["JIRA_DRY_RUN"] = "1" if dry_run else "0"
 
 st.subheader("Brief / Prompt")
-example = """Historias a crear bajo la épica variable:
+example = """Ejemplo (con épica en el texto):
+Epic: Gran Bazar Chino
+
+Tareas a crear:
 - Diseño 1
 - Diseño 2
 - Diseño 3
