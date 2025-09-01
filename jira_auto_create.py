@@ -175,65 +175,57 @@ def to_adf_description(title: str, description: str, labels: List[str], due_date
 #  LLM: estructurar texto
 # =========================
 def llm_structurize_tasks(free_text: str) -> TaskBundle:
+    import os, json
     from openai import OpenAI
-    client = OpenAI(api_key=OPENAI_API_KEY)
 
-    # Detectar "Epic: ..." en el texto para dárselo al LLM como contexto
-    epic_name = detect_epic_name(free_text)
+    api_key = os.getenv("OPENAI_API_KEY")
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY no está seteada en el entorno/secrets de Streamlit.")
+    client = OpenAI(api_key=api_key)
 
     system = (
         "Sos un asistente que convierte un texto desordenado en un plan de tareas para Jira. "
         "Devolvés SOLO JSON válido según el esquema pedido. Prioridades válidas: Highest, High, Medium, Low, Lowest. "
         "Normalizá fechas al formato YYYY-MM-DD."
     )
-    user = f"""
-Si ves una línea 'Epic: NOMBRE', considerá que TODAS las tareas pertenecen a esa épica (campo 'epic' con el nombre).
-Convertí el siguiente texto en una lista de tareas con subtareas.
-
-REQUISITOS POR TAREA:
-- title
-- description
-- labels (1-3)
-- priority (Highest/High/Medium/Low/Lowest; default Medium)
-- due_date (YYYY-MM-DD o null)
-- assignee (email/nombre o null)
-- epic (nombre de la épica o null)
-- subtasks: (title, description, due_date, assignee opcional)
-
+    user = f"""Convertí el siguiente texto en una lista de tareas con subtareas.
+REQUISITOS POR TAREA: ... (tu prompt actual) ...
 TEXTO:
-\"\"\"{free_text}\"\"\"
+\"\"\"{free_text}\"\"\""""
 
-Devolvé SOLO este JSON:
-{{
-  "tasks": [
-    {{
-      "title": "...",
-      "description": "...",
-      "labels": ["...", "..."],
-      "priority": "Medium",
-      "due_date": "2025-08-30",
-      "assignee": null,
-      "epic": {json.dumps(epic_name) if epic_name else "null"},
-      "subtasks": [
-        {{
-          "title": "...",
-          "description": "...",
-          "due_date": "2025-08-29",
-          "assignee": null
-        }}
-      ]
-    }}
-  ]
-}}
-"""
-    resp = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[{"role":"system","content":system},{"role":"user","content":user}],
-        temperature=0.1,
-        response_format={"type":"json_object"}
-    )
-    data = json.loads(resp.choices[0].message.content)
-    return TaskBundle(**data)
+    # 1) Intento Chat Completions
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role":"system","content":system},{"role":"user","content":user}],
+            temperature=0.1,
+            response_format={"type":"json_object"},
+        )
+        data = json.loads(resp.choices[0].message.content)
+        return TaskBundle(**data)
+
+    except Exception as e_chat:
+        # 2) Fallback a Responses API
+        try:
+            resp2 = client.responses.create(
+                model=model, input=f"{system}\n\n{user}",
+                temperature=0.1, response_format={"type":"json_object"}
+            )
+            content_text = getattr(resp2, "output_text", None)
+            if not content_text:
+                parts = []
+                for out in getattr(resp2, "output", []):
+                    for c in getattr(out, "content", []):
+                        if getattr(c, "type", "") == "output_text":
+                            parts.append(getattr(c, "text", ""))
+                content_text = "".join(parts)
+            data = json.loads(content_text)
+            return TaskBundle(**data)
+        except Exception as e_resp:
+            raise RuntimeError(
+                f"OpenAI falló (¿key/modelo?). ChatCompletions: {e_chat} | Responses: {e_resp}"
+            )
 
 def detect_epic_name(text: str) -> Optional[str]:
     m = re.search(r"(?im)^\s*epic\s*:\s*(.+)$", text)
